@@ -246,7 +246,19 @@ jobs:
         run: |
           echo "🌉 Deploying the one-shot init bridge..."
           sed "s|\${NAME}|${NAME}|g" wrangler-ci-init.toml > wrangler-ci-init.build.toml
-          pnpm wrangler deploy -c wrangler-ci-init.build.toml 2>&1 | tee bridge.log
+
+          # A brand-new worker can answer 10007 on the workers.dev subdomain call right
+          # after the upload; the retry finds the script already registered.
+          set +e
+          for attempt in 1 2 3 4; do
+            pnpm wrangler deploy -c wrangler-ci-init.build.toml 2>&1 | tee bridge.log
+            DEPLOY_STATUS=${PIPESTATUS[0]}
+            if [ "$DEPLOY_STATUS" -eq 0 ]; then break; fi
+            if ! grep -q 'code: 10007' bridge.log; then break; fi
+            echo "retry $attempt: workers.dev subdomain not ready yet"
+            sleep 8
+          done
+          set -e
 
           BRIDGE_URL=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' bridge.log | head -1)
           if [ -z "$BRIDGE_URL" ]; then
