@@ -8,8 +8,21 @@
 //
 // The forwarded path is still guarded by the main worker's own secret check
 // (env.jwt_secret), so the bridge adds no extra authorization surface of its own.
+// It is a read-only transport: only GET is accepted, every other method is refused
+// before the service binding is called.
 export default {
 	async fetch(request, env) {
+		if (request.method !== 'GET') {
+			return new Response('method not allowed', {
+				status: 405,
+				headers: {
+					allow: 'GET',
+					'content-type': 'text/plain; charset=utf-8',
+					'cache-control': 'no-store'
+				}
+			});
+		}
+
 		const secret = new URL(request.url).pathname.replace(/^\/+/, '');
 		if (!secret) {
 			return new Response('missing secret', { status: 400 });

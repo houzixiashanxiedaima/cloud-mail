@@ -13,6 +13,11 @@ jobs:
   Deploy-cloud-mail:
     name: 🏗️ Build and Deploy
     runs-on: ubuntu-latest
+    # Serialize releases: two deployments must never overlap, and a queued run must
+    # not be cancelled (an interrupted deploy could leave the init bridge behind).
+    concurrency:
+      group: deploy-cloud-mail-release
+      cancel-in-progress: false
 
     env:
       NAME: ${{ secrets.NAME || vars.NAME || 'cloud-mail' }}
@@ -268,6 +273,37 @@ jobs:
 
           echo "bridge_url=$BRIDGE_URL" >> "$GITHUB_OUTPUT"
 
+      - name: 🔐 Verify init bridge guard
+        working-directory: ./mail-worker
+        run: |
+          # Proves the bridge is only a GET transport and that the main worker still
+          # enforces its own secret check. The wrong secret is random and generated
+          # here; the real JWT_SECRET is never printed.
+          BRIDGE_URL="${{ steps.bridge.outputs.bridge_url }}"
+          BAD_SECRET="ci-guard-$(date +%s)-${RANDOM}"
+          fail() { echo "❌ $1"; exit 1; }
+
+          set +e
+          CODE=$(curl -s -o guard-get.txt -w "%{http_code}" "$BRIDGE_URL/$BAD_SECRET")
+          GET_STATUS=$?
+          CODE_POST=$(curl -s -o guard-post.txt -w "%{http_code}" -X POST "$BRIDGE_URL/$BAD_SECRET")
+          POST_STATUS=$?
+          set -e
+
+          BODY_GET=$(printf '%s' "$(cat guard-get.txt)" | head -c 200)
+          BODY_POST=$(printf '%s' "$(cat guard-post.txt)" | head -c 200)
+          echo "GET  wrong secret -> curl=$GET_STATUS HTTP=$CODE body=$BODY_GET"
+          echo "POST wrong secret -> curl=$POST_STATUS HTTP=$CODE_POST body=$BODY_POST"
+
+          [ "$GET_STATUS" -eq 0 ] || fail "GET request to the bridge failed (curl $GET_STATUS)"
+          [ "$CODE" = "200" ] || fail "GET wrong secret returned HTTP $CODE, expected 200"
+          [ "$BODY_GET" = "❌ JWT secret mismatch" ] || fail "GET wrong secret was not rejected by the main worker"
+
+          [ "$POST_STATUS" -eq 0 ] || fail "POST request to the bridge failed (curl $POST_STATUS)"
+          [ "$CODE_POST" = "405" ] || fail "POST returned HTTP $CODE_POST, expected 405 from the bridge"
+
+          echo "✅ Bridge is GET-only and rejects an invalid secret."
+
       - name: ♻️ Initialize database
         run: |
           echo "🛠️ Starting database initialization..."
@@ -308,10 +344,3 @@ jobs:
           pnpm wrangler delete -c wrangler-ci-init.build.toml --force \
             || pnpm wrangler delete "${NAME}-ci-init" --force \
             || echo "::warning::init bridge cleanup failed; the next run redeploys the same worker name"
-
-      - name: 🗑️ Delete workflow runs
-        uses: GitRML/delete-workflow-runs@main
-        continue-on-error: true
-        with:
-          retain_days: '1'
-          keep_minimum_runs: '0'

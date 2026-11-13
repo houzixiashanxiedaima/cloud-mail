@@ -22,20 +22,26 @@
 | 文件 | 作用 |
 | --- | --- |
 | `.github/workflows/deploy-release.yml` | 上游发布流程的副本，改为在 `release` 推送时运行；初始化改为经桥接 Worker 调用 |
-| `mail-worker/src/ci-init.js` | 一次性桥接 Worker：用 service binding 直接调用主 Worker |
+| `mail-worker/src/ci-init.js` | 一次性桥接 Worker：只接受 `GET`，用 service binding 直接调用主 Worker |
 | `mail-worker/wrangler-ci-init.toml` | 桥接 Worker 的配置（`workers_dev = true`，service binding 指向主 Worker） |
 
 执行顺序：
 
 1. 构建并 `wrangler deploy` 主 Worker（与上游一致）。
 2. `wrangler deploy` 桥接 Worker `cloud-mail-ci-init`，拿到它的 `*.workers.dev` 地址。
-3. 请求 `https://cloud-mail-ci-init.<account>.workers.dev/<JWT_SECRET>`；桥接 Worker 用
+3. 验收桥接：用随机错误 secret 发一次 `GET`，必须返回 `200 ❌ JWT secret mismatch`；
+   用同一错误 secret 发一次 `POST`，必须直接返回 `405`（桥接自身拒绝，不转发）。
+   该步骤不打印真实 `JWT_SECRET`，失败则终止本次发布。
+4. 请求 `https://cloud-mail-ci-init.<account>.workers.dev/<JWT_SECRET>`；桥接 Worker 用
    service binding 转发到主 Worker 的 `/api/init/:secret`，不经过 zone 的 HTTP 边缘。
-4. 删除桥接 Worker（`if: always()`）。下次运行会以同名重新部署，残留不影响后续。
+5. 删除桥接 Worker（`if: always()`）。下次运行会以同名重新部署，残留不影响后续。
+
+发布作业用 `concurrency` 串行：同一时间只跑一个发布，后来的运行排队等待而不是取消。
+工作流不删除历史运行记录（上游副本里那段清理步骤已移除）。
 
 初始化接口自身的逻辑没有改动：`/api/init/:secret` 仍比对 `env.jwt_secret`，
-桥接 Worker 只是换了一条进站路径。`workers_dev` 只对「初始化桥接 Worker」开启，
-主 Worker 没有额外公网别名，整站防护保持原样。
+桥接 Worker 只是换了一条进站路径，并且只放行 `GET`，其他方法在桥接层直接返回 `405`。
+`workers_dev` 只对「初始化桥接 Worker」开启，主 Worker 没有额外公网别名，整站防护保持原样。
 
 ## 幂等性
 
