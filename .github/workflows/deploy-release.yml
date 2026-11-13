@@ -286,6 +286,26 @@ jobs:
           set +e
           CODE=$(curl -s -o guard-get.txt -w "%{http_code}" "$BRIDGE_URL/$BAD_SECRET")
           GET_STATUS=$?
+          set -e
+
+          # A workers.dev route propagates a few seconds after `wrangler deploy`: until then
+          # the edge answers 404 `error code: 1042` and the request never reaches the bridge.
+          # Retry until the bridge answers for real, then assert the semantics.
+          attempt=0
+          while [ "$CODE" = "404" ]; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -gt 12 ]; then
+              fail "bridge still not routable after 12 attempts (HTTP $CODE, body: $(cat guard-get.txt | head -c 120))"
+            fi
+            echo "attempt $attempt: bridge not routable yet (HTTP $CODE); retrying"
+            sleep 5
+            set +e
+            CODE=$(curl -s -o guard-get.txt -w "%{http_code}" "$BRIDGE_URL/$BAD_SECRET")
+            GET_STATUS=$?
+            set -e
+          done
+
+          set +e
           CODE_POST=$(curl -s -o guard-post.txt -w "%{http_code}" -X POST "$BRIDGE_URL/$BAD_SECRET")
           POST_STATUS=$?
           set -e
