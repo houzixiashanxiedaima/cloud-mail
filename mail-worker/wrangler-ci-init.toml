@@ -1,0 +1,10 @@
+# Config for the one-shot CI init bridge worker (see src/ci-init.js).
+# ${NAME} is substituted by .github/workflows/deploy-release.yml at deploy time.
+name = "${NAME}-ci-init"
+main = "src/ci-init.js"
+compatibility_date = "2025-06-04"
+workers_dev = true
+
+[[services]]
+binding = "MAIL"
+service = "${NAME}"
